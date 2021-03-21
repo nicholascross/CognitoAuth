@@ -27,6 +27,14 @@ public final class AuthService {
         }
     }
 
+    public func authenticateWithRefreshToken(_ refreshToken: String) {
+        do {
+            execute(request: try refreshTokenAuthRequest(token: refreshToken), completion: handleResult)
+        } catch {
+            self.delegate?.authService(self, authenticationFailedWithError: error)
+        }
+    }
+
     private func execute(request: URLRequest, completion: @escaping (Result<AuthenticationResult, Error>) -> Void) {
         let task = URLSession.shared.dataTask(with: request) { (data, response, error) in
             self.handleResponse(data: data, response: response, error: error, completion: completion)
@@ -100,6 +108,18 @@ public final class AuthService {
                 username: username,
                 password: password,
                 srpA: srpA,
+                secretHash: secretHash
+            ),
+            clientId: config.clientId
+        )
+
+        return request(target: Constants.initiateAuthTarget, body: try JSONEncoder().encode(requestBody))
+    }
+
+    private func refreshTokenAuthRequest(token: String) throws -> URLRequest {
+        let requestBody = RefreshTokenAuth(
+            authParameters: RefreshTokenParameters(
+                refreshToken: token,
                 secretHash: secretHash
             ),
             clientId: config.clientId
