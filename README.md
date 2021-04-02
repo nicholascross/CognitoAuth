@@ -1,6 +1,6 @@
 # CognitoAuth
 
-Usage example
+## Usage example
 
 ```swift
 import Foundation
@@ -44,3 +44,7 @@ service.delegate = delegate
 
 service.authenticate()
 ```
+
+## Acknlowedgements
+
+The [hard part](Sources/CognitoAuth/SRP.swift) of this process was done by [Adam Fowler](https://github.com/adam-fowler).  I cannot locate the original source repository.
