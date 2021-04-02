@@ -6,22 +6,22 @@ public final class AuthService {
 
     private let config: AuthConfig
     private let username: String
-    private let password: String
     private let srp: SRP<SHA256>
     public weak var delegate: AuthServiceDelegate?
     private var session: String?
     private var userId: String?
 
-    public init(config: AuthConfig, username: String, password: String) {
+    public init(config: AuthConfig, username: String) {
         self.config = config
         self.username = username
-        self.password = password
         self.srp = SRP<SHA256>()
     }
 
-    public func authenticate() {
+    public func authenticateWithPassword(_ password: String) {
         do {
-            execute(request: try initiateAuthRequest(password: password, srpA: srp.A.hex), completion: handleResult)
+            execute(request: try initiateAuthRequest(password: password, srpA: srp.A.hex)) {
+                self.handleResult($0, password: password)
+            }
         } catch {
             self.delegate?.authService(self, authenticationFailedWithError: error)
         }
@@ -29,7 +29,9 @@ public final class AuthService {
 
     public func authenticateWithRefreshToken(_ refreshToken: String) {
         do {
-            execute(request: try refreshTokenAuthRequest(token: refreshToken), completion: handleResult)
+            execute(request: try refreshTokenAuthRequest(token: refreshToken)) {
+                self.handleResult($0)
+            }
         } catch {
             self.delegate?.authService(self, authenticationFailedWithError: error)
         }
@@ -70,16 +72,19 @@ public final class AuthService {
         }
     }
 
-    private func handleResult(result: Result<AuthenticationResult, Error>) {
+    private func handleResult(_ result: Result<AuthenticationResult, Error>, password: String? = nil) {
         switch result {
         case let .success(.srpChallenge(challenge)):
             do {
-                guard let clientProof = srp.getPasswordAuthenticationKey(username: config.poolId + challenge.userId, password: password, B: challenge.srpB, salt: challenge.salt) else {
+                guard let password = password,
+                      let clientProof = srp.getPasswordAuthenticationKey(username: config.poolId + challenge.userId, password: password, B: challenge.srpB, salt: challenge.salt) else {
                     throw AuthServiceError.unableToGenerateClientProofKey
                 }
 
                 let key = SymmetricKey(data: clientProof)
-                execute(request: try verifyKnowledgeRequest(challenge: challenge, clientProofKey: key), completion: handleResult)
+                execute(request: try verifyKnowledgeRequest(challenge: challenge, clientProofKey: key)) {
+                    self.handleResult($0)
+                }
             } catch {
                 self.delegate?.authService(self, authenticationFailedWithError: error)
             }
@@ -87,7 +92,9 @@ public final class AuthService {
         case let .success(.mfaChallenge(challenge)):
             self.delegate?.authService(self, provideMFACode: { code in
                 do {
-                    execute(request: try verifyPossessionRequest(session: challenge.session, code: code), completion: handleResult)
+                    execute(request: try verifyPossessionRequest(session: challenge.session, code: code)) {
+                        self.handleResult($0)
+                    }
                 } catch {
                     self.delegate?.authService(self, authenticationFailedWithError: error)
                 }
