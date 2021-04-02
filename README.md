@@ -1,5 +1,7 @@
 # CognitoAuth
 
+A simple cognito SRP authenticator.  This was made mainly for testing purposes and may not be suitable for production usage.  A better option for production usage is probably [soto-cognito-authentication-kit](https://github.com/soto-project/soto-cognito-authentication-kit) if you don't mind the additional dependencies.
+
 ## Usage example
 
 ```swift
