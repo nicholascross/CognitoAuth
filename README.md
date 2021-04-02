@@ -17,7 +17,7 @@ let config = AuthConfig(
 
 let username = "ausername"
 let password = "apassword"
-let service = AuthService(config: config, username: username, password: password)
+let service = AuthService(config: config, username: username)
 
 public final class AuthDelegate: AuthServiceDelegate {
     public func authService(_ service: AuthService, authenticationSuccessful tokens: AuthTokens) {
@@ -44,7 +44,7 @@ let delegate = AuthDelegate()
 
 service.delegate = delegate
 
-service.authenticate()
+service.authenticateWithPassword(password)
 ```
 
 ## Acknlowedgements
