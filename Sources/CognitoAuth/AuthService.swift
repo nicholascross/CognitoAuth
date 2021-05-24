@@ -149,7 +149,10 @@ public final class AuthService {
             clientId: config.clientId
         )
 
-        return request(target: Constants.initiateAuthTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<InitiateAuth>(config: config)
+        builder.body = requestBody
+        builder.target = .initiateAuthTarget
+        return try builder.request()
     }
 
     private func refreshTokenAuthRequest(token: String) throws -> URLRequest {
@@ -161,7 +164,10 @@ public final class AuthService {
             clientId: config.clientId
         )
 
-        return request(target: Constants.initiateAuthTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<RefreshTokenAuth>(config: config)
+        builder.body = requestBody
+        builder.target = .initiateAuthTarget
+        return try builder.request()
     }
 
     private func verifyKnowledgeRequest(challenge: SRPChallenge, clientProofKey: SymmetricKey) throws -> URLRequest {
@@ -183,7 +189,10 @@ public final class AuthService {
             session: nil
         )
 
-        return request(target: Constants.verifyKnowledgeTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<ChallengeResponse<Knowledge>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
     private func verifyPossessionRequest(session: String, code: String) throws -> URLRequest {
@@ -194,7 +203,10 @@ public final class AuthService {
             session: session
         )
 
-        return request(target: Constants.verifyPossessionTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<ChallengeResponse<Possession>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
     private func changePasswordRequest(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
@@ -205,16 +217,10 @@ public final class AuthService {
             session: session
         )
 
-        return request(target: Constants.newPasswordRequiredTarget, body: try JSONEncoder().encode(requestBody))
-    }
-
-    private func request(target: String, body: Data) -> URLRequest {
-        var request = URLRequest(url: URL(string: "\(config.endpointURL.absoluteString)")!)
-        request.setValue(target, forHTTPHeaderField: Headers.requestTarget)
-        request.setValue(Constants.contentType, forHTTPHeaderField: Headers.contentType)
-        request.httpBody = body
-        request.httpMethod = Constants.requestMethod
-        return request
+        let builder = RequestBuilder<ChallengeResponse<NewPassword>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
     private var secretHash: SecretHash {
@@ -229,21 +235,9 @@ public final class AuthService {
     }()
 }
 
-
 private enum Constants {
-    static let initiateAuthTarget = "AWSCognitoIdentityProviderService.InitiateAuth"
-    static let verifyKnowledgeTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
-    static let verifyPossessionTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
-    static let newPasswordRequiredTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
-    static let contentType = "application/x-amz-json-1.1"
-    static let requestMethod = "POST"
     static let requestDateFormat = "EEE MMM d HH:mm:ss 'UTC' yyyy"
     static let requestTimeZone = "UTC"
-}
-
-private enum Headers {
-    static let requestTarget = "X-Amz-Target"
-    static let contentType = "Content-Type"
 }
 
 private enum RequestError: String, Error {
