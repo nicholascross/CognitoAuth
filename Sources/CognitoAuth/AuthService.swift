@@ -64,6 +64,21 @@ public final class AuthService {
             } else if let authResult = try? JSONDecoder().decode(AuthResult.self, from: responseData) {
                 let tokens = authResult.authenticationResult
                 completion(.success(.authenticated(AuthTokens(accessToken: tokens.accessToken, idToken: tokens.idToken, refreshToken: tokens.refreshToken))))
+            } else if let newPasswordChallenge = try? JSONDecoder().decode(Challenge<NewPasswordParameters>.self, from: responseData),
+                      newPasswordChallenge.challengeType == .newPasswordRequired {
+                session = newPasswordChallenge.session
+                guard let session = session else {
+                    completion(.failure(AuthServiceError.missingSession))
+                    return
+                }
+
+                completion(.success(.newPasswordChallenge(
+                        NewPasswordChallenge(
+                                requiredAttributes: newPasswordChallenge.challengeParameters.requiredAttributes,
+                                userAttributes: newPasswordChallenge.challengeParameters.userAttributes,
+                                session: session
+                        )
+                )))
             } else {
                 completion(.failure(AuthServiceError.unhandledChallengeType))
             }
@@ -93,6 +108,20 @@ public final class AuthService {
             self.delegate?.authService(self, provideMFACode: { code in
                 do {
                     execute(request: try verifyPossessionRequest(session: challenge.session, code: code)) {
+                        self.handleResult($0)
+                    }
+                } catch {
+                    self.delegate?.authService(self, authenticationFailedWithError: error)
+                }
+            })
+
+        case let .success(.newPasswordChallenge(challenge)):
+            self.delegate?.authService(self,
+                            requiredAttributes: challenge.requiredAttributes,
+                            userAttributes: challenge.userAttributes,
+                            provideNewPassword: { password, userAttributes in
+                do {
+                    execute(request: try changePasswordRequest(session: challenge.session, password: password, userAttributes: userAttributes)) {
                         self.handleResult($0)
                     }
                 } catch {
@@ -168,6 +197,17 @@ public final class AuthService {
         return request(target: Constants.verifyPossessionTarget, body: try JSONEncoder().encode(requestBody))
     }
 
+    private func changePasswordRequest(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
+        let requestBody = ChallengeResponse<NewPassword>(
+            challengeResponses: NewPassword(username: username, secretHash: secretHash, password: password, userAttributes: userAttributes),
+            challengeType: ChallengeType.newPasswordRequired.rawValue,
+            clientId: config.clientId,
+            session: session
+        )
+
+        return request(target: Constants.newPasswordRequiredTarget, body: try JSONEncoder().encode(requestBody))
+    }
+
     private func request(target: String, body: Data) -> URLRequest {
         var request = URLRequest(url: URL(string: "\(config.endpointURL.absoluteString)")!)
         request.setValue(target, forHTTPHeaderField: Headers.requestTarget)
@@ -199,6 +239,7 @@ public final class AuthService {
 private enum AuthenticationResult {
     case srpChallenge(SRPChallenge)
     case mfaChallenge(MFAChallenge)
+    case newPasswordChallenge(NewPasswordChallenge)
     case authenticated(AuthTokens)
 }
 
@@ -206,6 +247,7 @@ private enum Constants {
     static let initiateAuthTarget = "AWSCognitoIdentityProviderService.InitiateAuth"
     static let verifyKnowledgeTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
     static let verifyPossessionTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
+    static let newPasswordRequiredTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
     static let contentType = "application/x-amz-json-1.1"
     static let requestMethod = "POST"
     static let requestDateFormat = "EEE MMM d HH:mm:ss 'UTC' yyyy"
@@ -253,4 +295,10 @@ private struct MFAChallenge {
         self.destination = parameters.deliveryDestination
         self.session = session
     }
+}
+
+private struct NewPasswordChallenge {
+    let requiredAttributes: [String]
+    let userAttributes: [String: String]
+    let session: String
 }
