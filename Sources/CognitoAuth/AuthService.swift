@@ -144,7 +144,7 @@ public final class AuthService {
                 username: username,
                 password: password,
                 srpA: srpA,
-                secretHash: secretHash
+                secretHash: secretHash.hashString
             ),
             clientId: config.clientId
         )
@@ -156,7 +156,7 @@ public final class AuthService {
         let requestBody = RefreshTokenAuth(
             authParameters: RefreshTokenParameters(
                 refreshToken: token,
-                secretHash: secretHash
+                secretHash: secretHash.hashString
             ),
             clientId: config.clientId
         )
@@ -174,7 +174,7 @@ public final class AuthService {
             challengeResponses: Knowledge(
                 passwordClaimSecretBlock: challenge.secretBlock,
                 username: challenge.userId,
-                secretHash: secretHash,
+                secretHash: secretHash.hashString,
                 passwordClaimSignature: Data(claim).base64EncodedString(),
                 timestamp: timestamp
             ),
@@ -188,7 +188,7 @@ public final class AuthService {
 
     private func verifyPossessionRequest(session: String, code: String) throws -> URLRequest {
         let requestBody = ChallengeResponse<Possession>(
-            challengeResponses: Possession(username: username, secretHash: secretHash, code: code),
+            challengeResponses: Possession(username: username, secretHash: secretHash.hashString, code: code),
             challengeType: ChallengeType.smsMFA.rawValue,
             clientId: config.clientId,
             session: session
@@ -199,7 +199,7 @@ public final class AuthService {
 
     private func changePasswordRequest(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
         let requestBody = ChallengeResponse<NewPassword>(
-            challengeResponses: NewPassword(username: username, secretHash: secretHash, password: password, userAttributes: userAttributes),
+            challengeResponses: NewPassword(username: username, secretHash: secretHash.hashString, password: password, userAttributes: userAttributes),
             challengeType: ChallengeType.newPasswordRequired.rawValue,
             clientId: config.clientId,
             session: session
@@ -217,8 +217,8 @@ public final class AuthService {
         return request
     }
 
-    private var secretHash: String {
-        return AuthService.generateSecretHash(clientId: config.clientId, clientSecret: config.clientSecret, username: userId ?? username)
+    private var secretHash: SecretHash {
+        return SecretHash(clientId: config.clientId, clientSecret: config.clientSecret, username: userId ?? username)
     }
 
     private lazy var dateFormatter: DateFormatter = {
@@ -228,12 +228,7 @@ public final class AuthService {
         return formatter
     }()
 
-    private static func generateSecretHash(clientId: String, clientSecret: String, username: String) -> String {
-        let message = Data((username + clientId).utf8)
-        let key = SymmetricKey(data: Data(clientSecret.utf8))
-        let secretHash = HMAC<SHA256>.authenticationCode(for: message, using: key)
-        return Data(secretHash).base64EncodedString()
-    }
+
 }
 
 private enum AuthenticationResult {
