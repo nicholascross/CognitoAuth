@@ -1,6 +1,6 @@
 import Foundation
 
-struct Knowledge: Encodable {
+struct SRPChallengeResponse: Encodable {
     private enum CodingKeys: String, CodingKey {
         case passwordClaimSecretBlock = "PASSWORD_CLAIM_SECRET_BLOCK"
         case username = "USERNAME"

@@ -1,6 +1,6 @@
 import Foundation
 
-struct NewPassword: Encodable {
+struct NewPasswordChallengeResponse: Encodable {
     private enum CodingKeys: String, CodingKey {
         case username = "USERNAME"
         case secretHash = "SECRET_HASH"

@@ -55,15 +55,19 @@ public final class AuthService {
                 session = passwordChallenge.session
                 userId = passwordChallenge.challengeParameters.userID
                 completion(.success(.srpChallenge(try SRPChallenge(parameters: passwordChallenge.challengeParameters))))
+
             } else if let mfaChallenge = try? JSONDecoder().decode(Challenge<MultiFactorAuthParamaters>.self, from: responseData) {
                 guard let session = session else {
                     completion(.failure(AuthServiceError.missingSession))
                     return
                 }
+
                 completion(.success(.mfaChallenge(try MFAChallenge(parameters: mfaChallenge.challengeParameters, session: session))))
+
             } else if let authResult = try? JSONDecoder().decode(AuthResult.self, from: responseData) {
                 let tokens = authResult.authenticationResult
                 completion(.success(.authenticated(AuthTokens(accessToken: tokens.accessToken, idToken: tokens.idToken, refreshToken: tokens.refreshToken))))
+
             } else if let newPasswordChallenge = try? JSONDecoder().decode(Challenge<NewPasswordParameters>.self, from: responseData),
                       newPasswordChallenge.challengeType == .newPasswordRequired {
                 session = newPasswordChallenge.session
@@ -79,6 +83,7 @@ public final class AuthService {
                                 session: session
                         )
                 )))
+
             } else {
                 completion(.failure(AuthServiceError.unhandledChallengeType))
             }
@@ -113,7 +118,7 @@ public final class AuthService {
                         userAttributes: challenge.userAttributes,
                         provideNewPassword: { password, userAttributes in
             do {
-                execute(request: try changePasswordRequest(session: challenge.session, password: password, userAttributes: userAttributes)) {
+                execute(request: try respondToNewPasswordChallenge(session: challenge.session, password: password, userAttributes: userAttributes)) {
                     self.handleResult($0)
                 }
             } catch {
@@ -125,7 +130,7 @@ public final class AuthService {
     private func handleMFAChallenge(_ challenge: MFAChallenge) -> ()? {
         self.delegate?.authService(self, provideMFACode: { code in
             do {
-                execute(request: try verifyPossessionRequest(session: challenge.session, code: code)) {
+                execute(request: try respondToMFAChallenge(session: challenge.session, code: code)) {
                     self.handleResult($0)
                 }
             } catch {
@@ -142,7 +147,7 @@ public final class AuthService {
             }
 
             let key = SymmetricKey(data: clientProof)
-            execute(request: try verifyKnowledgeRequest(challenge: challenge, clientProofKey: key)) {
+            execute(request: try respondToSRPChallenge(challenge: challenge, clientProofKey: key)) {
                 self.handleResult($0)
             }
         } catch {
@@ -182,14 +187,14 @@ public final class AuthService {
         return try builder.request()
     }
 
-    private func verifyKnowledgeRequest(challenge: SRPChallenge, clientProofKey: SymmetricKey) throws -> URLRequest {
+    private func respondToSRPChallenge(challenge: SRPChallenge, clientProofKey: SymmetricKey) throws -> URLRequest {
         let timestamp = dateFormatter.string(from: Date())
 
         let message = Data("\(config.poolId)\(challenge.userId)".utf8) + challenge.secretBlockData + Data(timestamp.utf8)
         let claim = HMAC<SHA256>.authenticationCode(for: message, using:  clientProofKey)
 
-        let requestBody = ChallengeResponse<Knowledge>(
-            challengeResponses: Knowledge(
+        let requestBody = ChallengeResponse<SRPChallengeResponse>(
+            challengeResponses: SRPChallengeResponse(
                 passwordClaimSecretBlock: challenge.secretBlock,
                 username: challenge.userId,
                 secretHash: secretHash.hashString,
@@ -201,35 +206,35 @@ public final class AuthService {
             session: nil
         )
 
-        let builder = RequestBuilder<ChallengeResponse<Knowledge>>(config: config)
+        let builder = RequestBuilder<ChallengeResponse<SRPChallengeResponse>>(config: config)
         builder.body = requestBody
         builder.target = .respondToAuthChallenge
         return try builder.request()
     }
 
-    private func verifyPossessionRequest(session: String, code: String) throws -> URLRequest {
-        let requestBody = ChallengeResponse<Possession>(
-            challengeResponses: Possession(username: username, secretHash: secretHash.hashString, code: code),
+    private func respondToMFAChallenge(session: String, code: String) throws -> URLRequest {
+        let requestBody = ChallengeResponse<MFAChallengeResponse>(
+            challengeResponses: MFAChallengeResponse(username: username, secretHash: secretHash.hashString, code: code),
             challengeType: ChallengeType.smsMFA.rawValue,
             clientId: config.clientId,
             session: session
         )
 
-        let builder = RequestBuilder<ChallengeResponse<Possession>>(config: config)
+        let builder = RequestBuilder<ChallengeResponse<MFAChallengeResponse>>(config: config)
         builder.body = requestBody
         builder.target = .respondToAuthChallenge
         return try builder.request()
     }
 
-    private func changePasswordRequest(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
-        let requestBody = ChallengeResponse<NewPassword>(
-            challengeResponses: NewPassword(username: username, secretHash: secretHash.hashString, password: password, userAttributes: userAttributes),
+    private func respondToNewPasswordChallenge(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
+        let requestBody = ChallengeResponse<NewPasswordChallengeResponse>(
+            challengeResponses: NewPasswordChallengeResponse(username: username, secretHash: secretHash.hashString, password: password, userAttributes: userAttributes),
             challengeType: ChallengeType.newPasswordRequired.rawValue,
             clientId: config.clientId,
             session: session
         )
 
-        let builder = RequestBuilder<ChallengeResponse<NewPassword>>(config: config)
+        let builder = RequestBuilder<ChallengeResponse<NewPasswordChallengeResponse>>(config: config)
         builder.body = requestBody
         builder.target = .respondToAuthChallenge
         return try builder.request()

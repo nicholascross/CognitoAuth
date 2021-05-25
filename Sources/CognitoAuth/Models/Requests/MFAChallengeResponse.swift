@@ -1,6 +1,6 @@
 import Foundation
 
-struct Possession: Encodable {
+struct MFAChallengeResponse: Encodable {
     private enum CodingKeys: String, CodingKey {
         case username = "USERNAME"
         case secretHash = "SECRET_HASH"
