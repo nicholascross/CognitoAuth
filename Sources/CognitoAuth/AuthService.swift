@@ -4,10 +4,11 @@ import BigNum
 
 public final class AuthService {
 
+    public weak var delegate: AuthServiceDelegate?
+
     private let config: AuthConfig
     private let username: String
     private let srp: SRP<SHA256>
-    public weak var delegate: AuthServiceDelegate?
     private var session: String?
     private var userId: String?
 
@@ -142,7 +143,12 @@ public final class AuthService {
     private func handleSRPChallenge(_ challenge: SRPChallenge, password: String?) {
         do {
             guard let password = password,
-                  let clientProof = srp.getPasswordAuthenticationKey(username: config.poolId + challenge.userId, password: password, B: challenge.srpB, salt: challenge.salt) else {
+                  let clientProof = srp.getPasswordAuthenticationKey(
+                          username: config.poolId + challenge.userId,
+                          password: password,
+                          B: challenge.srpB,
+                          salt: challenge.salt
+                  ) else {
                 throw AuthServiceError.unableToGenerateClientProofKey
             }
 
@@ -228,7 +234,12 @@ public final class AuthService {
 
     private func respondToNewPasswordChallenge(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
         let requestBody = ChallengeResponse<NewPasswordChallengeResponse>(
-            challengeResponses: NewPasswordChallengeResponse(username: username, secretHash: secretHash.hashString, password: password, userAttributes: userAttributes),
+            challengeResponses: NewPasswordChallengeResponse(
+                    username: username,
+                    secretHash: secretHash.hashString,
+                    password: password,
+                    userAttributes: userAttributes
+            ),
             challengeType: ChallengeType.newPasswordRequired.rawValue,
             clientId: config.clientId,
             session: session
