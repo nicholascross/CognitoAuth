@@ -52,12 +52,12 @@ public final class AuthService {
                 throw RequestError.dataMissing
             }
 
-            if let passwordChallenge = try? JSONDecoder().decode(Challenge<PasswordVerifierParameters>.self, from: responseData) {
+            if let passwordChallenge: Challenge<PasswordVerifierParameters> = responseData.decode() {
                 session = passwordChallenge.session
                 userId = passwordChallenge.challengeParameters.userID
                 completion(.success(.srpChallenge(try SRPChallenge(parameters: passwordChallenge.challengeParameters))))
 
-            } else if let mfaChallenge = try? JSONDecoder().decode(Challenge<MultiFactorAuthParamaters>.self, from: responseData) {
+            } else if let mfaChallenge: Challenge<MultiFactorAuthParamaters> = responseData.decode() {
                 guard let session = session else {
                     completion(.failure(AuthServiceError.missingSession))
                     return
@@ -65,11 +65,17 @@ public final class AuthService {
 
                 completion(.success(.mfaChallenge(try MFAChallenge(parameters: mfaChallenge.challengeParameters, session: session))))
 
-            } else if let authResult = try? JSONDecoder().decode(AuthResult.self, from: responseData) {
+            } else if let authResult: AuthResult = responseData.decode() {
                 let tokens = authResult.authenticationResult
-                completion(.success(.authenticated(AuthTokens(accessToken: tokens.accessToken, idToken: tokens.idToken, refreshToken: tokens.refreshToken))))
+                completion(.success(.authenticated(
+                        AuthTokens(
+                                accessToken: tokens.accessToken,
+                                idToken: tokens.idToken,
+                                refreshToken: tokens.refreshToken
+                        )
+                )))
 
-            } else if let newPasswordChallenge = try? JSONDecoder().decode(Challenge<NewPasswordParameters>.self, from: responseData),
+            } else if let newPasswordChallenge: Challenge<NewPasswordParameters> = responseData.decode(),
                       newPasswordChallenge.challengeType == .newPasswordRequired {
                 session = newPasswordChallenge.session
                 guard let session = session else {
@@ -270,4 +276,10 @@ private enum Constants {
 
 private enum RequestError: String, Error {
     case dataMissing
+}
+
+private extension Data {
+    func decode<DecodableType: Decodable>(decoder: JSONDecoder = JSONDecoder()) -> DecodableType? {
+        return try? decoder.decode(DecodableType.self, from: self)
+    }
 }
