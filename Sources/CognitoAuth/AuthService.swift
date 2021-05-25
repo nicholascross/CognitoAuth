@@ -4,10 +4,11 @@ import BigNum
 
 public final class AuthService {
 
+    public weak var delegate: AuthServiceDelegate?
+
     private let config: AuthConfig
     private let username: String
     private let srp: SRP<SHA256>
-    public weak var delegate: AuthServiceDelegate?
     private var session: String?
     private var userId: String?
 
@@ -51,19 +52,45 @@ public final class AuthService {
                 throw RequestError.dataMissing
             }
 
-            if let passwordChallenge = try? JSONDecoder().decode(Challenge<PasswordVerifierParameters>.self, from: responseData) {
+            if let passwordChallenge: Challenge<PasswordVerifierParameters> = responseData.decode() {
                 session = passwordChallenge.session
                 userId = passwordChallenge.challengeParameters.userID
                 completion(.success(.srpChallenge(try SRPChallenge(parameters: passwordChallenge.challengeParameters))))
-            } else if let mfaChallenge = try? JSONDecoder().decode(Challenge<MultiFactorAuthParamaters>.self, from: responseData) {
+
+            } else if let mfaChallenge: Challenge<MultiFactorAuthParamaters> = responseData.decode() {
                 guard let session = session else {
                     completion(.failure(AuthServiceError.missingSession))
                     return
                 }
+
                 completion(.success(.mfaChallenge(try MFAChallenge(parameters: mfaChallenge.challengeParameters, session: session))))
-            } else if let authResult = try? JSONDecoder().decode(AuthResult.self, from: responseData) {
+
+            } else if let authResult: AuthResult = responseData.decode() {
                 let tokens = authResult.authenticationResult
-                completion(.success(.authenticated(AuthTokens(accessToken: tokens.accessToken, idToken: tokens.idToken, refreshToken: tokens.refreshToken))))
+                completion(.success(.authenticated(
+                        AuthTokens(
+                                accessToken: tokens.accessToken,
+                                idToken: tokens.idToken,
+                                refreshToken: tokens.refreshToken
+                        )
+                )))
+
+            } else if let newPasswordChallenge: Challenge<NewPasswordParameters> = responseData.decode(),
+                      newPasswordChallenge.challengeType == .newPasswordRequired {
+                session = newPasswordChallenge.session
+                guard let session = session else {
+                    completion(.failure(AuthServiceError.missingSession))
+                    return
+                }
+
+                completion(.success(.newPasswordChallenge(
+                        NewPasswordChallenge(
+                                requiredAttributes: newPasswordChallenge.challengeParameters.requiredAttributes,
+                                userAttributes: newPasswordChallenge.challengeParameters.userAttributes,
+                                session: session
+                        )
+                )))
+
             } else {
                 completion(.failure(AuthServiceError.unhandledChallengeType))
             }
@@ -75,30 +102,13 @@ public final class AuthService {
     private func handleResult(_ result: Result<AuthenticationResult, Error>, password: String? = nil) {
         switch result {
         case let .success(.srpChallenge(challenge)):
-            do {
-                guard let password = password,
-                      let clientProof = srp.getPasswordAuthenticationKey(username: config.poolId + challenge.userId, password: password, B: challenge.srpB, salt: challenge.salt) else {
-                    throw AuthServiceError.unableToGenerateClientProofKey
-                }
-
-                let key = SymmetricKey(data: clientProof)
-                execute(request: try verifyKnowledgeRequest(challenge: challenge, clientProofKey: key)) {
-                    self.handleResult($0)
-                }
-            } catch {
-                self.delegate?.authService(self, authenticationFailedWithError: error)
-            }
+            handleSRPChallenge(challenge, password: password)
 
         case let .success(.mfaChallenge(challenge)):
-            self.delegate?.authService(self, provideMFACode: { code in
-                do {
-                    execute(request: try verifyPossessionRequest(session: challenge.session, code: code)) {
-                        self.handleResult($0)
-                    }
-                } catch {
-                    self.delegate?.authService(self, authenticationFailedWithError: error)
-                }
-            })
+            handleMFAChallenge(challenge)
+
+        case let .success(.newPasswordChallenge(challenge)):
+            handleNewPasswordChallenge(challenge)
 
         case let .success(.authenticated(tokens)):
             self.delegate?.authService(self, authenticationSuccessful: tokens)
@@ -109,43 +119,97 @@ public final class AuthService {
         }
     }
 
+    private func handleNewPasswordChallenge(_ challenge: NewPasswordChallenge) -> ()? {
+        self.delegate?.authService(self,
+                        requiredAttributes: challenge.requiredAttributes,
+                        userAttributes: challenge.userAttributes,
+                        provideNewPassword: { password, userAttributes in
+            do {
+                execute(request: try respondToNewPasswordChallenge(session: challenge.session, password: password, userAttributes: userAttributes)) {
+                    self.handleResult($0)
+                }
+            } catch {
+                self.delegate?.authService(self, authenticationFailedWithError: error)
+            }
+        })
+    }
+
+    private func handleMFAChallenge(_ challenge: MFAChallenge) -> ()? {
+        self.delegate?.authService(self, provideMFACode: { code in
+            do {
+                execute(request: try respondToMFAChallenge(session: challenge.session, code: code)) {
+                    self.handleResult($0)
+                }
+            } catch {
+                self.delegate?.authService(self, authenticationFailedWithError: error)
+            }
+        })
+    }
+
+    private func handleSRPChallenge(_ challenge: SRPChallenge, password: String?) {
+        do {
+            guard let password = password,
+                  let clientProof = srp.getPasswordAuthenticationKey(
+                          username: config.poolId + challenge.userId,
+                          password: password,
+                          B: challenge.srpB,
+                          salt: challenge.salt
+                  ) else {
+                throw AuthServiceError.unableToGenerateClientProofKey
+            }
+
+            let key = SymmetricKey(data: clientProof)
+            execute(request: try respondToSRPChallenge(challenge: challenge, clientProofKey: key)) {
+                self.handleResult($0)
+            }
+        } catch {
+            self.delegate?.authService(self, authenticationFailedWithError: error)
+        }
+    }
+
     private func initiateAuthRequest(password: String, srpA: String) throws -> URLRequest {
         let requestBody = InitiateAuth(
             authParameters: AuthParameters(
                 username: username,
                 password: password,
                 srpA: srpA,
-                secretHash: secretHash
+                secretHash: secretHash.hashString
             ),
             clientId: config.clientId
         )
 
-        return request(target: Constants.initiateAuthTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<InitiateAuth>(config: config)
+        builder.body = requestBody
+        builder.target = .initiateAuthTarget
+        return try builder.request()
     }
 
     private func refreshTokenAuthRequest(token: String) throws -> URLRequest {
         let requestBody = RefreshTokenAuth(
             authParameters: RefreshTokenParameters(
                 refreshToken: token,
-                secretHash: secretHash
+                secretHash: secretHash.hashString
             ),
             clientId: config.clientId
         )
 
-        return request(target: Constants.initiateAuthTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<RefreshTokenAuth>(config: config)
+        builder.body = requestBody
+        builder.target = .initiateAuthTarget
+        return try builder.request()
     }
 
-    private func verifyKnowledgeRequest(challenge: SRPChallenge, clientProofKey: SymmetricKey) throws -> URLRequest {
+    private func respondToSRPChallenge(challenge: SRPChallenge, clientProofKey: SymmetricKey) throws -> URLRequest {
         let timestamp = dateFormatter.string(from: Date())
 
         let message = Data("\(config.poolId)\(challenge.userId)".utf8) + challenge.secretBlockData + Data(timestamp.utf8)
         let claim = HMAC<SHA256>.authenticationCode(for: message, using:  clientProofKey)
 
-        let requestBody = ChallengeResponse<Knowledge>(
-            challengeResponses: Knowledge(
+        let requestBody = ChallengeResponse<SRPChallengeResponse>(
+            challengeResponses: SRPChallengeResponse(
                 passwordClaimSecretBlock: challenge.secretBlock,
                 username: challenge.userId,
-                secretHash: secretHash,
+                secretHash: secretHash.hashString,
                 passwordClaimSignature: Data(claim).base64EncodedString(),
                 timestamp: timestamp
             ),
@@ -154,31 +218,47 @@ public final class AuthService {
             session: nil
         )
 
-        return request(target: Constants.verifyKnowledgeTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<ChallengeResponse<SRPChallengeResponse>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
-    private func verifyPossessionRequest(session: String, code: String) throws -> URLRequest {
-        let requestBody = ChallengeResponse<Possession>(
-            challengeResponses: Possession(username: username, secretHash: secretHash, code: code),
+    private func respondToMFAChallenge(session: String, code: String) throws -> URLRequest {
+        let requestBody = ChallengeResponse<MFAChallengeResponse>(
+            challengeResponses: MFAChallengeResponse(username: username, secretHash: secretHash.hashString, code: code),
             challengeType: ChallengeType.smsMFA.rawValue,
             clientId: config.clientId,
             session: session
         )
 
-        return request(target: Constants.verifyPossessionTarget, body: try JSONEncoder().encode(requestBody))
+        let builder = RequestBuilder<ChallengeResponse<MFAChallengeResponse>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
-    private func request(target: String, body: Data) -> URLRequest {
-        var request = URLRequest(url: URL(string: "\(config.endpointURL.absoluteString)")!)
-        request.setValue(target, forHTTPHeaderField: Headers.requestTarget)
-        request.setValue(Constants.contentType, forHTTPHeaderField: Headers.contentType)
-        request.httpBody = body
-        request.httpMethod = Constants.requestMethod
-        return request
+    private func respondToNewPasswordChallenge(session: String, password: String, userAttributes: [String: String]) throws -> URLRequest {
+        let requestBody = ChallengeResponse<NewPasswordChallengeResponse>(
+            challengeResponses: NewPasswordChallengeResponse(
+                    username: username,
+                    secretHash: secretHash.hashString,
+                    password: password,
+                    userAttributes: userAttributes
+            ),
+            challengeType: ChallengeType.newPasswordRequired.rawValue,
+            clientId: config.clientId,
+            session: session
+        )
+
+        let builder = RequestBuilder<ChallengeResponse<NewPasswordChallengeResponse>>(config: config)
+        builder.body = requestBody
+        builder.target = .respondToAuthChallenge
+        return try builder.request()
     }
 
-    private var secretHash: String {
-        return AuthService.generateSecretHash(clientId: config.clientId, clientSecret: config.clientSecret, username: userId ?? username)
+    private var secretHash: SecretHash {
+        return SecretHash(clientId: config.clientId, clientSecret: config.clientSecret, username: userId ?? username)
     }
 
     private lazy var dateFormatter: DateFormatter = {
@@ -187,70 +267,19 @@ public final class AuthService {
         formatter.timeZone = TimeZone(identifier: Constants.requestTimeZone)
         return formatter
     }()
-
-    private static func generateSecretHash(clientId: String, clientSecret: String, username: String) -> String {
-        let message = Data((username + clientId).utf8)
-        let key = SymmetricKey(data: Data(clientSecret.utf8))
-        let secretHash = HMAC<SHA256>.authenticationCode(for: message, using: key)
-        return Data(secretHash).base64EncodedString()
-    }
-}
-
-private enum AuthenticationResult {
-    case srpChallenge(SRPChallenge)
-    case mfaChallenge(MFAChallenge)
-    case authenticated(AuthTokens)
 }
 
 private enum Constants {
-    static let initiateAuthTarget = "AWSCognitoIdentityProviderService.InitiateAuth"
-    static let verifyKnowledgeTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
-    static let verifyPossessionTarget = "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
-    static let contentType = "application/x-amz-json-1.1"
-    static let requestMethod = "POST"
     static let requestDateFormat = "EEE MMM d HH:mm:ss 'UTC' yyyy"
     static let requestTimeZone = "UTC"
-}
-
-private enum Headers {
-    static let requestTarget = "X-Amz-Target"
-    static let contentType = "Content-Type"
 }
 
 private enum RequestError: String, Error {
     case dataMissing
 }
 
-private struct SRPChallenge {
-    let salt: [UInt8]
-    let secretBlock: String
-    let secretBlockData: Data
-    let srpB: BigNum
-    let username: String
-    let userId: String
-
-    init(parameters: PasswordVerifierParameters) throws {
-        guard let salt = BigNum(hex: parameters.salt)?.bytes else { throw AuthServiceError.invalidSalt(parameters.salt) }
-        guard let data = Data(base64Encoded: parameters.secretBlock) else { throw AuthServiceError.invalidSecret(parameters.secretBlock) }
-        guard let srpB = BigNum(hex: parameters.srpB) else { throw AuthServiceError.invalidSRPB(parameters.srpB) }
-
-        self.salt = salt
-        self.secretBlock = parameters.secretBlock
-        self.secretBlockData = data
-        self.srpB = srpB
-        self.username = parameters.username
-        self.userId = parameters.userID
-    }
-}
-
-private struct MFAChallenge {
-    let destination: String
-    let session: String
-
-    init(parameters: MultiFactorAuthParamaters, session: String) throws {
-        guard parameters.deliveryMedium == .sms else { throw AuthServiceError.invalidDeliveryMedium }
-
-        self.destination = parameters.deliveryDestination
-        self.session = session
+private extension Data {
+    func decode<DecodableType: Decodable>(decoder: JSONDecoder = JSONDecoder()) -> DecodableType? {
+        return try? decoder.decode(DecodableType.self, from: self)
     }
 }
